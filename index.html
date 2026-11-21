@@ -105,7 +105,7 @@
             </select>
           </div>
           <div class="lobby-tip">
-            Controls: <b>WASD / Arrows</b> to move, <b>E</b> Use, <b>Q</b> Kill, <b>R</b> Report, <b>V</b> Vent, <b>M</b> Map.
+            Controls: <b>WASD / Arrows</b> to move, <b>E</b> Use / Cams / Admin, <b>Q</b> Kill, <b>R</b> Report, <b>V</b> Vent, <b>M</b> Map.
           </div>
           <button id="btn-start-game" class="btn btn-primary btn-full hidden">Start Mission</button>
           <div id="waiting-host-msg" class="waiting-msg hidden">Waiting for host to launch mission...</div>
@@ -153,7 +153,7 @@
     <div id="sabotage-menu" class="sabotage-menu hidden">
       <div class="sab-title">SABOTAGE SYSTEMS</div>
       <button id="btn-sab-lights" class="btn btn-gold btn-sm">Cut Lights (Electrical)</button>
-      <button id="btn-sab-reactor" class="btn btn-danger btn-sm">Reactor Meltdown (35s)</button>
+      <button id="btn-sab-reactor" class="btn btn-danger btn-sm">Reactor Meltdown (40s)</button>
       <button id="btn-sab-close" class="btn btn-ghost btn-xs">Close</button>
     </div>
 
@@ -191,7 +191,7 @@
         <h3>SS HORIZON — DECK SCHEMATIC</h3>
         <button id="btn-close-map" class="btn btn-ghost btn-xs">Close (M)</button>
       </div>
-      <canvas id="mapCanvas" width="720" height="480"></canvas>
+      <canvas id="mapCanvas" width="750" height="525"></canvas>
       <div class="map-legend">
         <span><i class="dot dot-you"></i> You</span>
         <span><i class="dot dot-task"></i> Your Tasks</span>
@@ -200,7 +200,7 @@
     </div>
   </div>
 
-  <!-- TASK MINI-GAME MODAL -->
+  <!-- TASK / CONSOLE MODAL -->
   <div id="task-modal" class="modal-backdrop hidden">
     <div class="panel task-panel">
       <div class="modal-head">
