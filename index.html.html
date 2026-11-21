@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>VOID CREW — Multiplayer Space Deduction</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+  <!-- MAIN CANVAS -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- TOAST NOTIFICATION -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- TITLE / JOIN SCREEN -->
+  <div id="menu-screen" class="overlay-screen">
+    <div class="panel menu-panel">
+      <div class="brand">
+        <span class="brand-badge">SS HORIZON</span>
+        <h1>VOID CREW</h1>
+        <p class="subtitle">Social deduction for 3–10 players. Host a ship and invite your friends.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="player-name">CALLSIGN</label>
+        <input id="player-name" type="text" maxlength="14" placeholder="Enter your name..." autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label>SUIT COLOR</label>
+        <div id="color-picker" class="color-picker"></div>
+      </div>
+
+      <div class="menu-actions">
+        <button id="btn-host" class="btn btn-primary">Create Room</button>
+        <div class="divider"><span>OR JOIN A FRIEND</span></div>
+        <div class="join-row">
+          <input id="room-code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" />
+          <button id="btn-join" class="btn btn-secondary">Join</button>
+        </div>
+      </div>
+      <div id="menu-status" class="status-text"></div>
+    </div>
+  </div>
+
+  <!-- LOBBY SCREEN -->
+  <div id="lobby-screen" class="overlay-screen hidden">
+    <div class="panel lobby-panel">
+      <div class="lobby-header">
+        <div>
+          <span class="brand-badge">AIRLOCK LOBBY</span>
+          <h2>ROOM: <span id="lobby-code" class="accent-gold">-----</span></h2>
+        </div>
+        <div class="lobby-header-actions">
+          <button id="btn-copy-link" class="btn btn-gold btn-sm">Copy Invite Link</button>
+          <button id="btn-leave-lobby" class="btn btn-danger btn-sm">Leave</button>
+        </div>
+      </div>
+
+      <div class="lobby-grid">
+        <div class="lobby-roster-box">
+          <div class="section-head">
+            <span>CREW MANIFEST (<span id="player-count">0</span>/10)</span>
+            <div id="bot-controls" class="bot-controls hidden">
+              <button id="btn-add-bot" class="btn btn-ghost btn-xs">+ Bot</button>
+              <button id="btn-rem-bot" class="btn btn-ghost btn-xs">- Bot</button>
+            </div>
+          </div>
+          <div id="lobby-players" class="player-list"></div>
+        </div>
+
+        <div class="lobby-settings-box">
+          <div class="section-head"><span>MISSION SETTINGS</span></div>
+          <div class="setting-row">
+            <label>Impostors</label>
+            <select id="set-impostors">
+              <option value="1" selected>1 Impostor</option>
+              <option value="2">2 Impostors</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Kill Cooldown</label>
+            <select id="set-killcd">
+              <option value="15">15 sec</option>
+              <option value="22" selected>22 sec</option>
+              <option value="30">30 sec</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Move Speed</label>
+            <select id="set-speed">
+              <option value="230">1.0x Normal</option>
+              <option value="275" selected>1.2x Swift</option>
+              <option value="320">1.4x Fast</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Vote Time</label>
+            <select id="set-votetime">
+              <option value="45">45 sec</option>
+              <option value="60" selected>60 sec</option>
+              <option value="90">90 sec</option>
+            </select>
+          </div>
+          <div class="lobby-tip">
+            Controls: <b>WASD / Arrows</b> to move, <b>E</b> Use, <b>Q</b> Kill, <b>R</b> Report, <b>V</b> Vent, <b>M</b> Map.
+          </div>
+          <button id="btn-start-game" class="btn btn-primary btn-full hidden">Start Mission</button>
+          <div id="waiting-host-msg" class="waiting-msg hidden">Waiting for host to launch mission...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IN-GAME HUD -->
+  <div id="hud" class="hidden">
+    <!-- Top Left: Task Bar & Personal Tasks -->
+    <div class="hud-top-left">
+      <div class="task-progress-wrap">
+        <div class="task-progress-label">
+          <span>TOTAL TASKS</span>
+          <span id="task-percent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="task-progress-fill" class="progress-fill"></div>
+        </div>
+      </div>
+      <div id="task-list-box" class="task-list-box"></div>
+    </div>
+
+    <!-- Top Center: Sabotage Banner & Room Name -->
+    <div class="hud-top-center">
+      <div id="room-indicator" class="room-pill">CAFETERIA</div>
+      <div id="sabotage-banner" class="sabotage-banner hidden"></div>
+    </div>
+
+    <!-- Top Right: Controls -->
+    <div class="hud-top-right">
+      <div id="role-badge" class="role-badge">CREWMATE</div>
+      <button id="btn-toggle-map" class="hud-icon-btn" title="Ship Map (M)">MAP</button>
+      <button id="btn-mute" class="hud-icon-btn" title="Mute Audio">SFX</button>
+    </div>
+
+    <!-- Vent Action Strip (when inside vent) -->
+    <div id="vent-controls" class="vent-controls hidden">
+      <button id="btn-vent-hop" class="btn btn-teal">Hop Next Vent (V)</button>
+      <button id="btn-vent-exit" class="btn btn-danger">Exit Vent (E)</button>
+    </div>
+
+    <!-- Sabotage Picker (Impostor) -->
+    <div id="sabotage-menu" class="sabotage-menu hidden">
+      <div class="sab-title">SABOTAGE SYSTEMS</div>
+      <button id="btn-sab-lights" class="btn btn-gold btn-sm">Cut Lights (Electrical)</button>
+      <button id="btn-sab-reactor" class="btn btn-danger btn-sm">Reactor Meltdown (35s)</button>
+      <button id="btn-sab-close" class="btn btn-ghost btn-xs">Close</button>
+    </div>
+
+    <!-- Bottom Left: Mobile Joystick -->
+    <div id="joystick-zone" class="joystick-zone">
+      <div id="joystick-base" class="joystick-base">
+        <div id="joystick-knob" class="joystick-knob"></div>
+      </div>
+    </div>
+
+    <!-- Bottom Right: Action Buttons -->
+    <div class="hud-actions">
+      <button id="act-sabotage" class="action-btn act-sab hidden">
+        <span>SABO</span><small id="sab-cd"></small>
+      </button>
+      <button id="act-vent" class="action-btn act-vent hidden">
+        <span>VENT</span><small>V</small>
+      </button>
+      <button id="act-kill" class="action-btn act-kill hidden" disabled>
+        <span>KILL</span><small id="kill-cd">Q</small>
+      </button>
+      <button id="act-report" class="action-btn act-report" disabled>
+        <span>REPORT</span><small>R</small>
+      </button>
+      <button id="act-use" class="action-btn act-use" disabled>
+        <span>USE</span><small>E</small>
+      </button>
+    </div>
+  </div>
+
+  <!-- SHIP MAP OVERLAY -->
+  <div id="map-modal" class="modal-backdrop hidden">
+    <div class="panel map-panel">
+      <div class="modal-head">
+        <h3>SS HORIZON — DECK SCHEMATIC</h3>
+        <button id="btn-close-map" class="btn btn-ghost btn-xs">Close (M)</button>
+      </div>
+      <canvas id="mapCanvas" width="720" height="480"></canvas>
+      <div class="map-legend">
+        <span><i class="dot dot-you"></i> You</span>
+        <span><i class="dot dot-task"></i> Your Tasks</span>
+        <span><i class="dot dot-sab"></i> Active Sabotage</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASK MINI-GAME MODAL -->
+  <div id="task-modal" class="modal-backdrop hidden">
+    <div class="panel task-panel">
+      <div class="modal-head">
+        <h3 id="task-modal-title">TASK</h3>
+        <button id="btn-close-task" class="btn btn-ghost btn-xs">Cancel</button>
+      </div>
+      <div id="task-modal-body" class="task-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ROLE REVEAL SCREEN -->
+  <div id="reveal-screen" class="overlay-screen hidden">
+    <div class="reveal-content">
+      <div id="reveal-tag" class="reveal-tag">MISSION BRIEFING</div>
+      <h1 id="reveal-role">CREWMATE</h1>
+      <p id="reveal-desc"></p>
+    </div>
+  </div>
+
+  <!-- MEETING & VOTING MODAL -->
+  <div id="meeting-screen" class="overlay-screen hidden">
+    <div class="panel meeting-panel">
+      <div class="meeting-header">
+        <div>
+          <span id="meeting-reason" class="brand-badge">EMERGENCY MEETING</span>
+          <h2 id="meeting-caller">Discussion & Voting</h2>
+        </div>
+        <div class="timer-pill">TIME: <span id="meeting-timer">60</span>s</div>
+      </div>
+
+      <div class="meeting-body">
+        <div class="meeting-vote-col">
+          <div id="meeting-players" class="meeting-players-grid"></div>
+          <div class="vote-footer">
+            <button id="btn-skip-vote" class="btn btn-secondary btn-sm">Skip Vote</button>
+            <span id="vote-status-text" class="vote-status-text">Select a player to vote.</span>
+          </div>
+        </div>
+
+        <div class="meeting-chat-col">
+          <div class="section-head"><span>COMMS CHANNEL</span></div>
+          <div id="chat-messages" class="chat-messages"></div>
+          <form id="chat-form" class="chat-form">
+            <input id="chat-input" type="text" maxlength="120" placeholder="Type message..." autocomplete="off" />
+            <button type="submit" class="btn btn-primary btn-sm">Send</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EJECTION SCREEN -->
+  <div id="eject-screen" class="overlay-screen hidden">
+    <div class="reveal-content">
+      <div id="eject-avatar" class="eject-avatar"></div>
+      <h2 id="eject-text"></h2>
+      <p id="eject-sub"></p>
+    </div>
+  </div>
+
+  <!-- GAME OVER SCREEN -->
+  <div id="gameover-screen" class="overlay-screen hidden">
+    <div class="panel gameover-panel">
+      <div id="gameover-tag" class="brand-badge">MISSION ENDED</div>
+      <h1 id="gameover-title">VICTORY</h1>
+      <p id="gameover-reason"></p>
+      <div id="gameover-impostors" class="gameover-impostors"></div>
+      <div class="gameover-actions">
+        <button id="btn-play-again" class="btn btn-primary hidden">Return to Lobby</button>
+        <div id="gameover-wait" class="waiting-msg hidden">Waiting for host to return to lobby...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="world.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
