@@ -1,4 +1,4 @@
-/* VOID CREW — PeerJS Multiplayer Engine, Bot AI, Task Mini-Games & Main Loop */
+/* VOID CREW — PeerJS Multiplayer Engine, Bot AI, Security Cams, Admin Map & Mini-Games */
 (function () {
   const W = window.VoidWorld;
   const $ = (id) => document.getElementById(id);
@@ -16,54 +16,49 @@
   let peer = null;
   let isHost = false;
   let hostConn = null;
-  const clientConns = {}; // peerId -> DataConnection (host only)
+  const clientConns = {};
 
   let localId = null;
   let roomCode = '';
   let selectedColor = W.COLORS[0].hex;
   let activeTask = null;
   let activeSabFix = null;
+  let activeConsole = null; // 'security' | 'admin' | null
   let myVote = null;
   let mapOpen = false;
   let killCooldownLocal = 0;
   let sabCooldownLocal = 0;
 
-  // Remote position targets for smooth 60 FPS interpolation
   const remoteTargets = {};
-
-  // --- AUTHORITATIVE GAME STATE (synced from host) ---
   let state = createEmptyState();
 
   function createEmptyState() {
     return {
-      phase: 'menu', // menu | lobby | reveal | playing | meeting | eject | gameover
+      phase: 'menu',
       settings: { impostors: 1, killCd: 22, speed: 275, voteTime: 60 },
       players: {},
       bodies: [],
-      sabotage: null, // { type: 'lights'|'reactor', timer: number }
-      meeting: null,  // { reason, callerName, timer, votes: {}, chat: [] }
-      eject: null,    // { text, sub, color }
-      winner: null,   // { team, reason, impostors: [] }
+      sabotage: null,
+      meeting: null,
+      eject: null,
+      winner: null,
       taskProgress: 0
     };
   }
 
-  // Bot runtime memory (host only)
   const botBrains = {};
   const BOT_NAMES = ['Nova', 'Orion', 'Vega', 'Lyra', 'Kael', 'Zora', 'Atlas', 'Echo', 'Cyrus'];
 
-  // --- INPUT STATE ---
   const keys = {};
   const joy = { active: false, vx: 0, vy: 0, touchId: null };
 
-  // --- INIT UI ---
+  // --- INIT ---
   function init() {
     renderColorPicker();
     bindUIEvents();
     setupCanvas();
     setupJoystick();
 
-    // Auto-fill room code from invite link (?room=XXXXX)
     const params = new URLSearchParams(window.location.search);
     const inviteRoom = params.get('room');
     if (inviteRoom) {
@@ -135,17 +130,15 @@
     });
 
     peer.on('connection', (conn) => {
-      conn.on('open', () => {
-        clientConns[conn.peer] = conn;
-      });
+      conn.on('open', () => { clientConns[conn.peer] = conn; });
       conn.on('data', (msg) => handleHostReceive(conn, msg));
       conn.on('close', () => {
         delete clientConns[conn.peer];
         if (state.players[conn.peer]) {
-          if (state.phase === 'lobby') {
-            delete state.players[conn.peer];
-          } else {
+          if (state.phase === 'lobby') delete state.players[conn.peer];
+          else {
             state.players[conn.peer].alive = false;
+            state.players[conn.peer].watchingCams = false;
             state.players[conn.peer].disconnected = true;
             checkWinConditions();
           }
@@ -163,10 +156,7 @@
   function joinRoom() {
     const name = getCallsign();
     const code = $('room-code-input').value.trim().toUpperCase();
-    if (code.length < 4) {
-      $('menu-status').textContent = 'Enter a valid room code.';
-      return;
-    }
+    if (code.length < 4) { $('menu-status').textContent = 'Enter a valid room code.'; return; }
     roomCode = code;
     $('menu-status').textContent = `Connecting to room ${code}...`;
     if (peer) peer.destroy();
@@ -176,19 +166,13 @@
       isHost = false;
       localId = id;
       hostConn = peer.connect('voidcrew-' + code, { reliable: true });
-      hostConn.on('open', () => {
-        hostConn.send({ type: 'join', name, color: selectedColor });
-      });
+      hostConn.on('open', () => { hostConn.send({ type: 'join', name, color: selectedColor }); });
       hostConn.on('data', (msg) => handleClientReceive(msg));
-      hostConn.on('close', () => {
-        showToast('Disconnected from host.');
-        leaveToMenu();
-      });
+      hostConn.on('close', () => { showToast('Disconnected from host.'); leaveToMenu(); });
     });
 
     peer.on('error', (err) => {
-      $('menu-status').textContent = err.type === 'peer-unavailable'
-        ? `Room ${code} not found.` : `Error: ${err.type}`;
+      $('menu-status').textContent = err.type === 'peer-unavailable' ? `Room ${code} not found.` : `Error: ${err.type}`;
     });
   }
 
@@ -199,9 +183,7 @@
 
   function broadcast(msg) {
     if (!isHost) return;
-    for (const c of Object.values(clientConns)) {
-      if (c.open) c.send(msg);
-    }
+    for (const c of Object.values(clientConns)) if (c.open) c.send(msg);
   }
 
   function broadcastState() {
@@ -228,6 +210,11 @@
 
     if (msg.type === 'pos' && state.phase === 'playing') {
       p.x = msg.x; p.y = msg.y; p.facing = msg.facing; p.moving = msg.moving;
+      return;
+    }
+
+    if (msg.type === 'cams' && state.phase === 'playing') {
+      p.watchingCams = !!msg.active;
       return;
     }
 
@@ -261,7 +248,7 @@
 
     if (msg.type === 'sabotageStart' && state.phase === 'playing') {
       if (!p.alive || p.role !== 'impostor' || state.sabotage) return;
-      state.sabotage = { type: msg.sabType, timer: msg.sabType === 'reactor' ? 35 : 0 };
+      state.sabotage = { type: msg.sabType, timer: msg.sabType === 'reactor' ? 40 : 0 };
       broadcast({ type: 'sfx', name: 'alarm' });
       W.SFX.alarm();
       broadcastState();
@@ -280,7 +267,7 @@
 
     if (msg.type === 'report' && state.phase === 'playing') {
       if (!p.alive) return;
-      startMeeting('DEAD BODY REPORTED', `${p.name} found a body!`);
+      startMeeting('DEAD BODY REPORTED', `${p.name} reported a body!`);
       return;
     }
 
@@ -304,7 +291,7 @@
 
     if (msg.type === 'vote' && state.phase === 'meeting') {
       if (!p.alive || state.meeting.votes[pid] !== undefined) return;
-      state.meeting.votes[pid] = msg.targetId; // peerId or 'skip'
+      state.meeting.votes[pid] = msg.targetId;
       broadcastState();
       renderMeetingUI();
       checkAllVoted();
@@ -327,23 +314,15 @@
     if (msg.type === 'state') {
       const prevPhase = state.phase;
       const incoming = msg.state;
-
-      // Preserve local player's predicted position during smooth play
       const myPrev = state.players[localId];
       const keepLocalPos = prevPhase === 'playing' && incoming.phase === 'playing' && myPrev && incoming.players[localId] && !incoming.players[localId].teleported;
 
       for (const [id, p] of Object.entries(incoming.players)) {
         if (id !== localId) {
           remoteTargets[id] = { x: p.x, y: p.y };
-          if (state.players[id]) {
-            p.x = state.players[id].x;
-            p.y = state.players[id].y;
-          }
+          if (state.players[id]) { p.x = state.players[id].x; p.y = state.players[id].y; }
         } else if (keepLocalPos) {
-          p.x = myPrev.x;
-          p.y = myPrev.y;
-          p.facing = myPrev.facing;
-          p.moving = myPrev.moving;
+          p.x = myPrev.x; p.y = myPrev.y; p.facing = myPrev.facing; p.moving = myPrev.moving;
         }
       }
       state = incoming;
@@ -352,13 +331,9 @@
   }
 
   function onPhaseSync(prev, next) {
-    if (next === 'lobby') {
-      showScreen('lobby');
-      updateLobbyUI();
-    } else if (next === 'reveal' && prev !== 'reveal') {
-      closeModals();
-      showRevealScreen();
-    } else if (next === 'playing') {
+    if (next === 'lobby') { showScreen('lobby'); updateLobbyUI(); }
+    else if (next === 'reveal' && prev !== 'reveal') { closeModals(); showRevealScreen(); }
+    else if (next === 'playing') {
       if (prev !== 'playing') {
         showScreen('hud');
         killCooldownLocal = Math.min(10, state.settings.killCd);
@@ -366,23 +341,16 @@
       }
       updateHudTasks();
     } else if (next === 'meeting') {
-      if (prev !== 'meeting') {
-        myVote = null;
-        closeModals();
-        showScreen('meeting');
-      }
+      if (prev !== 'meeting') { myVote = null; closeModals(); showScreen('meeting'); }
       renderMeetingUI();
     } else if (next === 'eject') {
       if (prev !== 'eject') showEjectScreen();
     } else if (next === 'gameover') {
-      if (prev !== 'gameover') {
-        closeModals();
-        showGameOverScreen();
-      }
+      if (prev !== 'gameover') { closeModals(); showGameOverScreen(); }
     }
   }
 
-  // --- PLAYER & GAME MANAGEMENT (HOST) ---
+  // --- PLAYER & MATCH MANAGEMENT (HOST) ---
   function pickAvailableColor(preferred) {
     const used = new Set(Object.values(state.players).map((p) => p.color));
     if (preferred && !used.has(preferred)) return preferred;
@@ -393,8 +361,8 @@
   function addPlayerToState(id, name, color, isBot, hostFlag) {
     state.players[id] = {
       id, name, color, isBot, isHost: hostFlag,
-      x: 1200, y: 360, facing: 1, moving: false,
-      role: 'crewmate', alive: true, inVent: false, tasks: []
+      x: W.EMERGENCY_POS.x, y: W.EMERGENCY_POS.y + 100, facing: 1, moving: false,
+      role: 'crewmate', alive: true, inVent: false, watchingCams: false, tasks: []
     };
   }
 
@@ -433,7 +401,6 @@
     };
     const impCount = Math.min(state.settings.impostors, Math.max(1, Math.floor(players.length / 3)));
 
-    // Shuffle roles
     const ids = players.map((p) => p.id).sort(() => Math.random() - 0.5);
     const impSet = new Set(ids.slice(0, impCount));
 
@@ -442,17 +409,17 @@
     state.meeting = null;
     state.winner = null;
 
-    ids.forEach((id, idx) => {
+    ids.forEach((id) => {
       const p = state.players[id];
       p.role = impSet.has(id) ? 'impostor' : 'crewmate';
       p.alive = true;
       p.inVent = false;
+      p.watchingCams = false;
       p.disconnected = false;
-      // Assign 4 random tasks
-      const shuffled = [...W.TASKS].sort(() => Math.random() - 0.5).slice(0, 4);
+      const shuffled = [...W.TASKS].sort(() => Math.random() - 0.5).slice(0, 5);
       p.tasks = shuffled.map((t) => ({ id: t.id, room: t.room, label: t.label, done: false }));
       if (p.isBot) {
-        botBrains[id] = { wp: 3, targetWp: 8, wait: 1, killCd: 14, chatSent: false };
+        botBrains[id] = { wp: 4, targetWp: [3, 5, 11][Math.floor(Math.random() * 3)], wait: 1, killCd: 15, chatSent: false };
       }
     });
 
@@ -477,19 +444,23 @@
     const list = Object.values(state.players);
     list.forEach((p, i) => {
       const angle = (i / list.length) * Math.PI * 2;
-      p.x = W.EMERGENCY_POS.x + Math.cos(angle) * 108;
-      p.y = W.EMERGENCY_POS.y + Math.sin(angle) * 108;
+      p.x = W.EMERGENCY_POS.x + Math.cos(angle) * 106;
+      p.y = W.EMERGENCY_POS.y + Math.sin(angle) * 106;
       p.inVent = false;
+      p.watchingCams = false;
       p.teleported = true;
+      if (p.isBot && botBrains[p.id]) {
+        botBrains[p.id].wp = 4;
+        botBrains[p.id].targetWp = [3, 4, 5][i % 3];
+      }
     });
-    setTimeout(() => {
-      Object.values(state.players).forEach((p) => delete p.teleported);
-    }, 250);
+    setTimeout(() => { Object.values(state.players).forEach((p) => delete p.teleported); }, 250);
   }
 
   function executeKill(killer, victim) {
     victim.alive = false;
     victim.inVent = false;
+    victim.watchingCams = false;
     state.bodies.push({ id: victim.id, name: victim.name, color: victim.color, x: victim.x, y: victim.y });
     killer.x = victim.x;
     killer.y = victim.y;
@@ -521,7 +492,7 @@
       votes: {},
       chat: [{ name: 'SYSTEM', color: '#e8b94d', text: `${callerName} Discuss and vote!` }]
     };
-    Object.values(state.players).forEach((p) => { p.inVent = false; });
+    Object.values(state.players).forEach((p) => { p.inVent = false; p.watchingCams = false; });
     Object.values(botBrains).forEach((b) => { b.chatSent = false; b.voteDelay = 3 + Math.random() * 8; });
     myVote = null;
     W.SFX.alarm();
@@ -535,24 +506,17 @@
   function checkAllVoted() {
     if (!isHost || state.phase !== 'meeting') return;
     const living = Object.values(state.players).filter((p) => p.alive);
-    const votedCount = living.filter((p) => state.meeting.votes[p.id] !== undefined).length;
-    if (votedCount >= living.length) {
-      resolveVotes();
-    }
+    if (living.filter((p) => state.meeting.votes[p.id] !== undefined).length >= living.length) resolveVotes();
   }
 
   function resolveVotes() {
     if (!isHost || state.phase !== 'meeting') return;
     const tally = {};
-    for (const target of Object.values(state.meeting.votes)) {
-      tally[target] = (tally[target] || 0) + 1;
-    }
-    let topTarget = 'skip';
-    let topCount = 0;
-    let tie = false;
+    for (const target of Object.values(state.meeting.votes)) tally[target] = (tally[target] || 0) + 1;
+    let topTarget = 'skip', topCount = 0, tie = false;
     for (const [k, v] of Object.entries(tally)) {
       if (v > topCount) { topCount = v; topTarget = k; tie = false; }
-      else if (v === topCount) { tie = true; }
+      else if (v === topCount) tie = true;
     }
 
     if (tie || topTarget === 'skip' || !state.players[topTarget]) {
@@ -619,7 +583,7 @@
     return false;
   }
 
-  // --- BOT AI (HOST ONLY) ---
+  // --- BOT AI (HOST) ---
   function updateBots(dt) {
     if (!isHost) return;
     if (state.phase === 'playing') {
@@ -628,17 +592,15 @@
         const brain = botBrains[p.id];
         if (!brain) continue;
 
-        // Check nearby body to report (Crewmate bots)
         if (p.role === 'crewmate') {
           for (const b of state.bodies) {
-            if (Math.hypot(p.x - b.x, p.y - b.y) < 165 && W.hasLineOfSight(p.x, p.y, b.x, b.y)) {
-              startMeeting('DEAD BODY REPORTED', `${p.name} found ${b.name}'s body!`);
+            if (Math.hypot(p.x - b.x, p.y - b.y) < 175 && W.hasLineOfSight(p.x, p.y, b.x, b.y)) {
+              startMeeting('DEAD BODY REPORTED', `${p.name} found ${b.name}'s body in ${W.getRoomName(b.x, b.y)}!`);
               return;
             }
           }
         }
 
-        // Impostor bot kill check
         if (p.role === 'impostor') {
           brain.killCd = Math.max(0, brain.killCd - dt);
           if (brain.killCd <= 0) {
@@ -656,13 +618,12 @@
           }
         }
 
-        // Pause at waypoint (simulating tasks)
         if (brain.wait > 0) {
           brain.wait -= dt;
           p.moving = false;
           if (brain.wait <= 0 && p.role === 'crewmate') {
             const nextT = (p.tasks || []).find((t) => !t.done);
-            if (nextT && Math.random() < 0.35) {
+            if (nextT && Math.random() < 0.3) {
               nextT.done = true;
               recalcTaskProgress();
               checkWinConditions();
@@ -671,19 +632,20 @@
           continue;
         }
 
-        // Walk toward target waypoint
         const target = W.WAYPOINTS[brain.targetWp];
-        const dx = target.x - p.x;
-        const dy = target.y - p.y;
+        const dx = target.x - p.x, dy = target.y - p.y;
         const dist = Math.hypot(dx, dy);
-        if (dist < 18) {
+        if (dist < 20) {
+          const prev = brain.wp;
           brain.wp = brain.targetWp;
           const adj = W.WAYPOINTS[brain.wp].adj;
-          brain.targetWp = adj[Math.floor(Math.random() * adj.length)];
-          brain.wait = Math.random() < 0.4 ? (1.8 + Math.random() * 2.5) : 0;
+          const forward = adj.filter((id) => id !== prev);
+          const choices = forward.length ? forward : adj;
+          brain.targetWp = choices[Math.floor(Math.random() * choices.length)];
+          brain.wait = Math.random() < 0.32 ? (1.8 + Math.random() * 2.4) : 0;
           p.moving = false;
         } else {
-          const spd = state.settings.speed * 0.85;
+          const spd = state.settings.speed * 0.86;
           const step = W.resolveCollision(p.x + (dx / dist) * spd * dt, p.y + (dy / dist) * spd * dt, W.PLAYER_RADIUS, false);
           p.x = step.x; p.y = step.y;
           p.facing = dx >= 0 ? 1 : -1;
@@ -698,14 +660,14 @@
         brain.voteDelay -= dt;
         if (!brain.chatSent && brain.voteDelay < 4) {
           brain.chatSent = true;
-          const lines = ['Where was the body?', `I was near ${W.getRoomName(p.x, p.y)}.`, 'Any suspects?', 'Skipping unless someone saw it.'];
+          const lines = ['Where was the body?', `I was doing tasks in ${W.getRoomName(p.x, p.y)}.`, 'Anyone on cams or admin?', 'Skip if no solid proof.'];
           state.meeting.chat.push({ name: p.name, color: p.color, text: lines[Math.floor(Math.random() * lines.length)] });
           renderMeetingUI();
           broadcastState();
         }
         if (brain.voteDelay <= 0 && state.meeting.votes[p.id] === undefined) {
           const candidates = Object.values(state.players).filter((o) => o.alive && o.id !== p.id);
-          const pick = Math.random() < 0.45 ? 'skip' : candidates[Math.floor(Math.random() * candidates.length)].id;
+          const pick = Math.random() < 0.48 ? 'skip' : candidates[Math.floor(Math.random() * candidates.length)].id;
           state.meeting.votes[p.id] = pick;
           renderMeetingUI();
           broadcastState();
@@ -715,27 +677,28 @@
     }
   }
 
-  // --- INTERACTION HELPERS ---
+  // --- INTERACTIONS ---
   function getNearestInteractable() {
     const me = state.players[localId];
     if (!me || state.phase !== 'playing') return null;
 
     if (me.alive && state.sabotage) {
       const s = W.SABOTAGES[state.sabotage.type];
-      if (s && Math.hypot(me.x - s.x, me.y - s.y) < 88) {
-        return { kind: 'sabotage', data: s };
-      }
+      if (s && Math.hypot(me.x - s.x, me.y - s.y) < 92) return { kind: 'sabotage', data: s };
     }
-    if (me.alive && !state.sabotage && Math.hypot(me.x - W.EMERGENCY_POS.x, me.y - W.EMERGENCY_POS.y) < 105) {
+    if (me.alive && !state.sabotage && Math.hypot(me.x - W.EMERGENCY_POS.x, me.y - W.EMERGENCY_POS.y) < 110) {
       return { kind: 'emergency' };
     }
     if (me.role === 'crewmate' && me.tasks) {
       for (const mt of me.tasks) {
         if (mt.done) continue;
         const t = W.TASKS.find((x) => x.id === mt.id);
-        if (t && Math.hypot(me.x - t.x, me.y - t.y) < 78) {
-          return { kind: 'task', data: t };
-        }
+        if (t && Math.hypot(me.x - t.x, me.y - t.y) < 82) return { kind: 'task', data: t };
+      }
+    }
+    if (me.alive) {
+      for (const c of Object.values(W.CONSOLES)) {
+        if (Math.hypot(me.x - c.x, me.y - c.y) < 86) return { kind: 'console', data: c };
       }
     }
     return null;
@@ -744,7 +707,7 @@
   function getNearestKillTarget() {
     const me = state.players[localId];
     if (!me || !me.alive || me.role !== 'impostor' || me.inVent || killCooldownLocal > 0) return null;
-    let best = null, bestD = 110;
+    let best = null, bestD = 112;
     for (const p of Object.values(state.players)) {
       if (p.id === localId || !p.alive || p.role === 'impostor') continue;
       const d = Math.hypot(p.x - me.x, p.y - me.y);
@@ -757,7 +720,7 @@
     const me = state.players[localId];
     if (!me || !me.alive || me.inVent) return null;
     for (const b of state.bodies) {
-      if (Math.hypot(b.x - me.x, b.y - me.y) < 120 && W.hasLineOfSight(me.x, me.y, b.x, b.y)) return b;
+      if (Math.hypot(b.x - me.x, b.y - me.y) < 125 && W.hasLineOfSight(me.x, me.y, b.x, b.y)) return b;
     }
     return null;
   }
@@ -765,9 +728,7 @@
   function getNearestVent() {
     const me = state.players[localId];
     if (!me || !me.alive || me.role !== 'impostor') return null;
-    for (const v of W.VENTS) {
-      if (Math.hypot(v.x - me.x, v.y - me.y) < 72) return v;
-    }
+    for (const v of W.VENTS) if (Math.hypot(v.x - me.x, v.y - me.y) < 76) return v;
     return null;
   }
 
@@ -780,6 +741,7 @@
     if (item.kind === 'emergency') sendToHost({ type: 'emergency' });
     else if (item.kind === 'task') openTaskMiniGame(item.data);
     else if (item.kind === 'sabotage') openSabotageMiniGame(item.data);
+    else if (item.kind === 'console') openUtilityConsole(item.data);
   }
 
   function triggerKill() {
@@ -805,15 +767,13 @@
       W.SFX.vent();
       $('vent-controls').classList.remove('hidden');
       sendToHost({ type: 'ventToggle', inVent: true, x: v.x, y: v.y });
-    } else {
-      hopNextVent();
-    }
+    } else hopNextVent();
   }
 
   function hopNextVent() {
     const me = state.players[localId];
     if (!me || !me.inVent) return;
-    const cur = W.VENTS.find((v) => Math.hypot(v.x - me.x, v.y - me.y) < 40) || W.VENTS[0];
+    const cur = W.VENTS.find((v) => Math.hypot(v.x - me.x, v.y - me.y) < 42) || W.VENTS[0];
     const net = W.VENTS.filter((v) => v.net === cur.net);
     const next = net[(net.indexOf(cur) + 1) % net.length];
     me.x = next.x; me.y = next.y;
@@ -830,6 +790,28 @@
     sendToHost({ type: 'ventToggle', inVent: false, x: me.x, y: me.y });
   }
 
+  // --- UTILITY CONSOLES (SECURITY CAMS & ADMIN MAP) ---
+  function openUtilityConsole(consoleInfo) {
+    activeConsole = consoleInfo.id;
+    $('task-modal-title').textContent = consoleInfo.label.toUpperCase();
+    const body = $('task-modal-body');
+    body.innerHTML = '';
+    const cv = document.createElement('canvas');
+    cv.id = 'consoleCanvas';
+    cv.className = 'console-canvas';
+    cv.width = 500;
+    cv.height = 330;
+    const note = document.createElement('div');
+    note.style.fontSize = '0.78rem';
+    note.style.color = '#94a3b8';
+    note.textContent = consoleInfo.id === 'security'
+      ? 'Live CCTV Hallway Feeds — red camera LEDs blink on the walls while viewing.'
+      : 'Live Admin Tracking — yellow markers show living crewmates currently inside each room.';
+    body.append(cv, note);
+    $('task-modal').classList.remove('hidden');
+    if (consoleInfo.id === 'security') sendToHost({ type: 'cams', active: true });
+  }
+
   // --- TASK & SABOTAGE MINI-GAMES ---
   function openTaskMiniGame(task) {
     activeTask = task;
@@ -841,7 +823,11 @@
     if (task.type === 'keypad') buildKeypadGame(body, () => completeTask(task.id));
     else if (task.type === 'wires') buildWiresGame(body, () => completeTask(task.id));
     else if (task.type === 'numbers') buildNumbersGame(body, () => completeTask(task.id));
-    else buildHoldGame(body, 'HOLD TO SCAN', 2.0, () => completeTask(task.id));
+    else if (task.type === 'lights') buildLightsGame(body, 'Prime all 5 shield capacitors to ON.', () => completeTask(task.id));
+    else if (task.type === 'asteroids') buildAsteroidsGame(body, () => completeTask(task.id));
+    else if (task.type === 'clean') buildCleanO2Game(body, () => completeTask(task.id));
+    else if (task.type === 'card') buildCardSwipeGame(body, () => completeTask(task.id));
+    else buildHoldGame(body, 'HOLD TO COMPLETE', 2.0, () => completeTask(task.id));
   }
 
   function openSabotageMiniGame(sab) {
@@ -851,8 +837,8 @@
     body.innerHTML = '';
     $('task-modal').classList.remove('hidden');
 
-    if (sab.id === 'lights') buildLightsGame(body, () => completeSabotage('lights'));
-    else buildHoldGame(body, 'HOLD TO STABILIZE', 2.2, () => completeSabotage('reactor'));
+    if (sab.id === 'lights') buildLightsGame(body, 'Flip all 5 electrical breakers to ON.', () => completeSabotage('lights'));
+    else buildHoldGame(body, 'HOLD HAND ON SCANNER', 2.2, () => completeSabotage('reactor'));
   }
 
   function completeTask(taskId) {
@@ -874,17 +860,14 @@
     const target = String(Math.floor(1000 + Math.random() * 9000));
     let entered = '';
     const info = document.createElement('div');
-    info.innerHTML = `Enter Security Code: <b style="color:#e8b94d;letter-spacing:0.2em">${target}</b>`;
+    info.innerHTML = `Enter Access Code: <b style="color:#e8b94d;letter-spacing:0.2em">${target}</b>`;
     const disp = document.createElement('div');
-    disp.className = 'keypad-display';
-    disp.textContent = '----';
-    const grid = document.createElement('div');
-    grid.className = 'keypad-grid';
+    disp.className = 'keypad-display'; disp.textContent = '----';
+    const grid = document.createElement('div'); grid.className = 'keypad-grid';
 
     ['1','2','3','4','5','6','7','8','9','C','0','OK'].forEach((k) => {
       const b = document.createElement('button');
-      b.className = 'keypad-btn';
-      b.textContent = k;
+      b.className = 'keypad-btn'; b.textContent = k;
       b.onclick = () => {
         W.SFX.click();
         if (k === 'C') entered = '';
@@ -899,30 +882,22 @@
   }
 
   function buildWiresGame(container, onWin) {
-    const cols = [
-      { id: 'RED', bg: '#ef4444' },
-      { id: 'BLUE', bg: '#3b82f6' },
-      { id: 'GOLD', bg: '#eab308' },
-      { id: 'TEAL', bg: '#14b8a6' }
-    ];
+    const cols = [{ id: 'RED', bg: '#ef4444' }, { id: 'BLUE', bg: '#3b82f6' }, { id: 'GOLD', bg: '#eab308' }, { id: 'TEAL', bg: '#14b8a6' }];
     const left = [...cols].sort(() => Math.random() - 0.5);
     const right = [...cols].sort(() => Math.random() - 0.5);
     let picked = null, matched = 0;
 
     const tip = document.createElement('div');
-    tip.textContent = 'Match each left wire to its matching color on the right.';
+    tip.textContent = 'Connect each left wire to its matching terminal on the right.';
     tip.style.fontSize = '0.84rem'; tip.style.color = '#94a3b8';
 
-    const board = document.createElement('div');
-    board.className = 'wires-board';
+    const board = document.createElement('div'); board.className = 'wires-board';
     const cL = document.createElement('div'); cL.className = 'wires-col';
     const cR = document.createElement('div'); cR.className = 'wires-col';
 
     left.forEach((w) => {
       const b = document.createElement('button');
-      b.className = 'wire-node';
-      b.style.background = w.bg;
-      b.textContent = w.id;
+      b.className = 'wire-node'; b.style.background = w.bg; b.textContent = w.id;
       b.onclick = () => {
         if (b.classList.contains('matched')) return;
         W.SFX.click();
@@ -935,26 +910,18 @@
 
     right.forEach((w) => {
       const b = document.createElement('button');
-      b.className = 'wire-node';
-      b.style.background = w.bg;
-      b.textContent = w.id;
+      b.className = 'wire-node'; b.style.background = w.bg; b.textContent = w.id;
       b.onclick = () => {
         if (!picked || b.classList.contains('matched')) return;
         if (picked.id === w.id) {
           W.SFX.task();
-          picked.el.classList.remove('selected');
-          picked.el.classList.add('matched');
-          b.classList.add('matched');
-          picked = null;
-          matched++;
-          if (matched === 4) setTimeout(onWin, 200);
-        } else {
-          W.SFX.click();
-        }
+          picked.el.classList.remove('selected'); picked.el.classList.add('matched');
+          b.classList.add('matched'); picked = null;
+          if (++matched === 4) setTimeout(onWin, 180);
+        } else W.SFX.click();
       };
       cR.appendChild(b);
     });
-
     board.append(cL, cR);
     container.append(tip, board);
   }
@@ -963,21 +930,17 @@
     let next = 1;
     const nums = [1,2,3,4,5,6,7,8,9].sort(() => Math.random() - 0.5);
     const tip = document.createElement('div');
-    tip.textContent = 'Tap manifolds in ascending order (1 to 9).';
+    tip.textContent = 'Tap relays in ascending sequence (1 to 9).';
     tip.style.fontSize = '0.84rem'; tip.style.color = '#94a3b8';
-    const grid = document.createElement('div');
-    grid.className = 'keypad-grid';
+    const grid = document.createElement('div'); grid.className = 'keypad-grid';
 
     nums.forEach((n) => {
       const b = document.createElement('button');
-      b.className = 'keypad-btn';
-      b.textContent = n;
+      b.className = 'keypad-btn'; b.textContent = n;
       b.onclick = () => {
         if (n === next) {
-          W.SFX.click();
-          b.classList.add('done');
-          next++;
-          if (next > 9) setTimeout(onWin, 180);
+          W.SFX.click(); b.classList.add('done');
+          if (++next > 9) setTimeout(onWin, 180);
         }
       };
       grid.appendChild(b);
@@ -985,15 +948,13 @@
     container.append(tip, grid);
   }
 
-  function buildLightsGame(container, onWin) {
-    const tip = document.createElement('div');
-    tip.textContent = 'Flip all 5 breaker switches to ON.';
-    const row = document.createElement('div');
-    row.className = 'switches-row';
+  function buildLightsGame(container, text, onWin) {
+    const tip = document.createElement('div'); tip.textContent = text;
+    const row = document.createElement('div'); row.className = 'switches-row';
     const states = [0, 1, 0, 0, 1].sort(() => Math.random() - 0.5);
     if (states.every(Boolean)) states[0] = 0;
 
-    const renderSwitches = () => {
+    const renderSw = () => {
       row.innerHTML = '';
       states.forEach((on, idx) => {
         const b = document.createElement('button');
@@ -1002,25 +963,105 @@
         b.onclick = () => {
           W.SFX.click();
           states[idx] = states[idx] ? 0 : 1;
-          renderSwitches();
+          renderSw();
           if (states.every(Boolean)) setTimeout(onWin, 180);
         };
         row.appendChild(b);
       });
     };
-    renderSwitches();
+    renderSw();
     container.append(tip, row);
+  }
+
+  function buildAsteroidsGame(container, onWin) {
+    let destroyed = 0;
+    const goal = 7;
+    const status = document.createElement('div');
+    status.textContent = `Destroy Asteroids: 0 / ${goal}`;
+    const arena = document.createElement('div');
+    arena.className = 'radar-arena';
+
+    const spawnRock = () => {
+      if (destroyed >= goal || $('task-modal').classList.contains('hidden')) return;
+      const b = document.createElement('button');
+      b.className = 'asteroid-btn';
+      b.style.left = (20 + Math.random() * 265) + 'px';
+      b.style.top = (20 + Math.random() * 155) + 'px';
+      b.onclick = () => {
+        W.SFX.click();
+        b.remove();
+        destroyed++;
+        status.textContent = `Destroy Asteroids: ${destroyed} / ${goal}`;
+        if (destroyed >= goal) setTimeout(onWin, 180);
+        else spawnRock();
+      };
+      arena.appendChild(b);
+    };
+    spawnRock(); spawnRock();
+    container.append(status, arena);
+  }
+
+  function buildCleanO2Game(container, onWin) {
+    let left = 6;
+    const status = document.createElement('div');
+    status.textContent = `Tap all ${left} leaves to clear the O2 filter`;
+    const arena = document.createElement('div');
+    arena.className = 'radar-arena';
+    arena.style.background = '#13242b';
+
+    for (let i = 0; i < left; i++) {
+      const b = document.createElement('button');
+      b.className = 'leaf-btn';
+      b.style.left = (25 + Math.random() * 260) + 'px';
+      b.style.top = (20 + Math.random() * 165) + 'px';
+      b.style.transform = `rotate(${Math.random() * 180}deg)`;
+      b.onclick = () => {
+        W.SFX.click();
+        b.remove();
+        left--;
+        status.textContent = left ? `${left} leaves remaining` : 'Filter clear!';
+        if (left <= 0) setTimeout(onWin, 180);
+      };
+      arena.appendChild(b);
+    }
+    container.append(status, arena);
+  }
+
+  function buildCardSwipeGame(container, onWin) {
+    let startTs = 0;
+    const box = document.createElement('div'); box.className = 'card-reader-box';
+    const msg = document.createElement('div');
+    msg.textContent = 'Drag your Crew ID smoothly from left to right.';
+    msg.style.color = '#e2e8f0'; msg.style.fontSize = '0.88rem';
+    const slider = document.createElement('input');
+    slider.type = 'range'; slider.min = 0; slider.max = 100; slider.value = 0;
+    slider.className = 'card-slider';
+
+    slider.oninput = () => {
+      if (!startTs && Number(slider.value) > 5) startTs = performance.now();
+      if (Number(slider.value) >= 98) {
+        const dur = performance.now() - startTs;
+        if (dur < 160) {
+          msg.textContent = 'Too fast! Try swiping smoothly.';
+          msg.style.color = '#f87171';
+          slider.value = 0; startTs = 0;
+        } else {
+          msg.textContent = 'ACCEPTED — WELCOME CREWMATE';
+          msg.style.color = '#4ade80';
+          slider.disabled = true;
+          setTimeout(onWin, 220);
+        }
+      }
+    };
+    box.append(msg, slider);
+    container.append(box);
   }
 
   function buildHoldGame(container, label, secs, onWin) {
     let holding = false, progress = 0, done = false;
-    const btn = document.createElement('button');
-    btn.className = 'hold-btn';
-    btn.textContent = label;
-    const bar = document.createElement('div');
-    bar.className = 'progress-track'; bar.style.width = '240px';
-    const fill = document.createElement('div');
-    fill.className = 'progress-fill';
+    const btn = document.createElement('button'); btn.className = 'hold-btn'; btn.textContent = label;
+    const bar = document.createElement('div'); bar.className = 'progress-track'; bar.style.width = '260px';
+    const fill = document.createElement('div'); fill.className = 'progress-fill';
     bar.appendChild(fill);
 
     const startH = (e) => { e.preventDefault(); holding = true; };
@@ -1041,7 +1082,7 @@
     container.append(btn, bar);
   }
 
-  // --- UI SCREEN MANAGEMENT ---
+  // --- UI SCREENS ---
   function showScreen(name) {
     ['menu-screen', 'lobby-screen', 'hud', 'reveal-screen', 'meeting-screen', 'eject-screen', 'gameover-screen']
       .forEach((id) => $(id).classList.add('hidden'));
@@ -1050,6 +1091,7 @@
   }
 
   function closeModals() {
+    if (activeConsole === 'security') sendToHost({ type: 'cams', active: false });
     $('task-modal').classList.add('hidden');
     $('map-modal').classList.add('hidden');
     $('sabotage-menu').classList.add('hidden');
@@ -1057,6 +1099,7 @@
     mapOpen = false;
     activeTask = null;
     activeSabFix = null;
+    activeConsole = null;
   }
 
   function updateLobbyUI() {
@@ -1081,9 +1124,7 @@
     $('bot-controls').classList.toggle('hidden', !isHost);
     $('btn-start-game').classList.toggle('hidden', !isHost);
     $('waiting-host-msg').classList.toggle('hidden', isHost);
-    ['set-impostors', 'set-killcd', 'set-speed', 'set-votetime'].forEach((id) => {
-      $(id).disabled = !isHost;
-    });
+    ['set-impostors', 'set-killcd', 'set-speed', 'set-votetime'].forEach((id) => { $(id).disabled = !isHost; });
   }
 
   function showRevealScreen() {
@@ -1096,9 +1137,9 @@
       const allies = Object.values(state.players).filter((p) => p.role === 'impostor' && p.id !== localId).map((p) => p.name);
       $('reveal-desc').textContent = allies.length
         ? `Sabotage systems and eliminate the crew. Fellow impostor: ${allies.join(', ')}.`
-        : 'Sabotage systems, use vents, and eliminate the crew without getting caught.';
+        : 'Sabotage systems, use the 4 vent loops, and eliminate the crew without getting caught.';
     } else {
-      $('reveal-desc').textContent = 'Complete all ship tasks or identify and eject the impostor during meetings.';
+      $('reveal-desc').textContent = 'Complete all ship tasks, watch Security Cams & Admin Map, and eject the impostor.';
     }
   }
 
@@ -1109,21 +1150,14 @@
     $('task-progress-fill').style.width = state.taskProgress + '%';
 
     const badge = $('role-badge');
-    if (!me.alive) {
-      badge.textContent = 'GHOST';
-      badge.className = 'role-badge ghost';
-    } else if (me.role === 'impostor') {
-      badge.textContent = 'IMPOSTOR';
-      badge.className = 'role-badge impostor';
-    } else {
-      badge.textContent = 'CREWMATE';
-      badge.className = 'role-badge';
-    }
+    if (!me.alive) { badge.textContent = 'GHOST'; badge.className = 'role-badge ghost'; }
+    else if (me.role === 'impostor') { badge.textContent = 'IMPOSTOR'; badge.className = 'role-badge impostor'; }
+    else { badge.textContent = 'CREWMATE'; badge.className = 'role-badge'; }
 
     const box = $('task-list-box');
     if (me.role === 'impostor') {
-      box.innerHTML = `<div style="color:#fca5a5;font-weight:700;margin-bottom:4px">SABOTAGE & ELIMINATE</div>
-        <div style="color:#94a3b8;font-size:0.74rem">Blend in near stations. Use vents & sabotage to isolate crewmates.</div>`;
+      box.innerHTML = `<div style="color:#fca5a5;font-weight:800;margin-bottom:4px">SABOTAGE & ELIMINATE</div>
+        <div style="color:#94a3b8;font-size:0.74rem">Check Security Cams or Admin Map to hunt isolated crewmates.</div>`;
     } else {
       box.innerHTML = (me.tasks || []).map((t) =>
         `<div class="task-item ${t.done ? 'done' : ''}"><span>${t.room}: ${t.label}</span><span>${t.done ? '✓' : '•'}</span></div>`
@@ -1161,8 +1195,7 @@
       `;
       if (canVote && p.alive) {
         card.onclick = () => {
-          myVote = p.id;
-          W.SFX.click();
+          myVote = p.id; W.SFX.click();
           sendToHost({ type: 'vote', targetId: p.id });
           renderMeetingUI();
         };
@@ -1202,8 +1235,7 @@
 
   function leaveToMenu() {
     if (peer) { peer.destroy(); peer = null; }
-    isHost = false;
-    hostConn = null;
+    isHost = false; hostConn = null;
     state = createEmptyState();
     closeModals();
     showScreen('menu');
@@ -1240,7 +1272,6 @@
           if (state.sabotage.timer <= 0) checkWinConditions();
         }
       } else {
-        // Interpolate remote players smoothly
         for (const [id, t] of Object.entries(remoteTargets)) {
           const p = state.players[id];
           if (p) {
@@ -1251,7 +1282,6 @@
         }
       }
 
-      // 20Hz Network Tick
       netAccum += dt;
       if (netAccum >= 0.05) {
         netAccum = 0;
@@ -1264,6 +1294,13 @@
 
       W.renderGame(ctx, window.innerWidth, window.innerHeight, state, localId, now);
       if (mapOpen) W.renderMiniMap($('mapCanvas'), state, localId);
+      if (activeConsole) {
+        const cv = $('consoleCanvas');
+        if (cv) {
+          if (activeConsole === 'security') W.renderSecurityCams(cv, state, now);
+          else if (activeConsole === 'admin') W.renderAdminTable(cv, state);
+        }
+      }
     } else if (state.phase === 'meeting' && isHost) {
       updateBots(dt);
       state.meeting.timer -= dt;
@@ -1278,7 +1315,7 @@
 
   function updateLocalMovement(dt) {
     const me = state.players[localId];
-    if (!me || me.inVent || activeTask || activeSabFix) {
+    if (!me || me.inVent || activeTask || activeSabFix || activeConsole) {
       if (me) me.moving = false;
       return;
     }
@@ -1288,22 +1325,17 @@
     if (keys['KeyS'] || keys['ArrowDown']) vy += 1;
     if (keys['KeyA'] || keys['ArrowLeft']) vx -= 1;
     if (keys['KeyD'] || keys['ArrowRight']) vx += 1;
-
     if (joy.active) { vx = joy.vx; vy = joy.vy; }
 
     const mag = Math.hypot(vx, vy);
     if (mag > 0.08) {
-      const nx = vx / Math.max(1, mag);
-      const ny = vy / Math.max(1, mag);
+      const nx = vx / Math.max(1, mag), ny = vy / Math.max(1, mag);
       const spd = state.settings.speed * (me.alive ? 1 : 1.15);
       const next = W.resolveCollision(me.x + nx * spd * dt, me.y + ny * spd * dt, W.PLAYER_RADIUS, !me.alive);
-      me.x = next.x;
-      me.y = next.y;
+      me.x = next.x; me.y = next.y;
       if (Math.abs(nx) > 0.1) me.facing = nx > 0 ? 1 : -1;
       me.moving = true;
-    } else {
-      me.moving = false;
-    }
+    } else me.moving = false;
   }
 
   function updateCooldownsAndHud(dt) {
@@ -1321,27 +1353,25 @@
       sabBanner.textContent = state.sabotage.type === 'lights'
         ? 'LIGHTS SABOTAGED — FIX IN ELECTRICAL'
         : `REACTOR MELTDOWN IN ${Math.ceil(state.sabotage.timer)}s — RESET IN REACTOR`;
-    } else {
-      sabBanner.classList.add('hidden');
-    }
+    } else sabBanner.classList.add('hidden');
 
-    // Update contextual buttons
     const useItem = getNearestInteractable();
     $('act-use').disabled = !useItem && !me.inVent;
+    $('act-use').querySelector('span').textContent = useItem && useItem.kind === 'console'
+      ? (useItem.data.id === 'security' ? 'CAMS' : 'ADMIN')
+      : 'USE';
     $('act-report').disabled = !getNearestBody();
 
     if (me.alive && me.role === 'impostor') {
-      const killTarget = getNearestKillTarget();
-      $('act-kill').disabled = !killTarget;
+      $('act-kill').disabled = !getNearestKillTarget();
       $('kill-cd').textContent = killCooldownLocal > 0 ? Math.ceil(killCooldownLocal) + 's' : 'Q';
-
       $('act-vent').disabled = !me.inVent && !getNearestVent();
       $('act-sabotage').disabled = !!state.sabotage || sabCooldownLocal > 0;
       $('sab-cd').textContent = sabCooldownLocal > 0 ? Math.ceil(sabCooldownLocal) + 's' : '';
     }
   }
 
-  // --- EVENTS & MOBILE JOYSTICK ---
+  // --- EVENTS & JOYSTICK ---
   function bindUIEvents() {
     $('btn-host').onclick = startHost;
     $('btn-join').onclick = joinRoom;
@@ -1387,7 +1417,11 @@
 
     $('btn-toggle-map').onclick = toggleMap;
     $('btn-close-map').onclick = toggleMap;
-    $('btn-close-task').onclick = () => { activeTask = null; activeSabFix = null; $('task-modal').classList.add('hidden'); };
+    $('btn-close-task').onclick = () => {
+      if (activeConsole === 'security') sendToHost({ type: 'cams', active: false });
+      activeTask = null; activeSabFix = null; activeConsole = null;
+      $('task-modal').classList.add('hidden');
+    };
 
     $('btn-mute').onclick = () => {
       W.SFX.muted = !W.SFX.muted;
@@ -1395,8 +1429,7 @@
     };
 
     $('btn-skip-vote').onclick = () => {
-      myVote = 'skip';
-      W.SFX.click();
+      myVote = 'skip'; W.SFX.click();
       sendToHost({ type: 'vote', targetId: 'skip' });
       renderMeetingUI();
     };
@@ -1436,30 +1469,24 @@
 
     const updateStick = (clientX, clientY) => {
       const rect = zone.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-      let dx = clientX - cx;
-      let dy = clientY - cy;
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      let dx = clientX - cx, dy = clientY - cy;
       const dist = Math.hypot(dx, dy);
       if (dist > maxR) { dx = (dx / dist) * maxR; dy = (dy / dist) * maxR; }
       knob.style.transform = `translate(${dx}px, ${dy}px)`;
-      joy.vx = dx / maxR;
-      joy.vy = dy / maxR;
+      joy.vx = dx / maxR; joy.vy = dy / maxR;
     };
 
     zone.addEventListener('touchstart', (e) => {
       e.preventDefault();
       const t = e.changedTouches[0];
-      joy.active = true;
-      joy.touchId = t.identifier;
+      joy.active = true; joy.touchId = t.identifier;
       updateStick(t.clientX, t.clientY);
     }, { passive: false });
 
     zone.addEventListener('touchmove', (e) => {
       e.preventDefault();
-      for (const t of e.changedTouches) {
-        if (t.identifier === joy.touchId) updateStick(t.clientX, t.clientY);
-      }
+      for (const t of e.changedTouches) if (t.identifier === joy.touchId) updateStick(t.clientX, t.clientY);
     }, { passive: false });
 
     const resetStick = () => {
