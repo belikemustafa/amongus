@@ -8,7 +8,7 @@
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
-  <!-- MAIN CANVAS -->
+  <!-- MAIN GAME & DROPSHIP CANVAS -->
   <canvas id="gameCanvas"></canvas>
 
   <!-- TOAST NOTIFICATION -->
@@ -20,7 +20,7 @@
       <div class="brand">
         <span class="brand-badge">SS HORIZON</span>
         <h1>VOID CREW</h1>
-        <p class="subtitle">Social deduction for 3–10 players. Host a ship and invite your friends.</p>
+        <p class="subtitle">Social deduction for 3–10 players with roles, blast doors & proximity voice.</p>
       </div>
 
       <div class="form-group">
@@ -45,70 +45,89 @@
     </div>
   </div>
 
-  <!-- LOBBY SCREEN -->
-  <div id="lobby-screen" class="overlay-screen hidden">
-    <div class="panel lobby-panel">
-      <div class="lobby-header">
-        <div>
-          <span class="brand-badge">AIRLOCK LOBBY</span>
-          <h2>ROOM: <span id="lobby-code" class="accent-gold">-----</span></h2>
-        </div>
-        <div class="lobby-header-actions">
-          <button id="btn-copy-link" class="btn btn-gold btn-sm">Copy Invite Link</button>
-          <button id="btn-leave-lobby" class="btn btn-danger btn-sm">Leave</button>
-        </div>
+  <!-- WALKABLE DROPSHIP LOBBY HUD -->
+  <div id="lobby-hud" class="hidden">
+    <div class="lobby-topbar">
+      <div class="lobby-room-pill">
+        <span class="brand-badge">DROPSHIP</span>
+        <strong>ROOM: <span id="lobby-code" class="accent-gold">-----</span></strong>
+        <span class="crew-count">CREW: <b id="player-count">0</b>/10</span>
       </div>
+      <div class="lobby-top-actions">
+        <button id="btn-copy-link" class="btn btn-gold btn-sm">Copy Invite</button>
+        <button id="btn-open-settings" class="btn btn-secondary btn-sm">Laptop / Settings (E)</button>
+        <button id="btn-lobby-mic" class="hud-icon-btn">MIC OFF</button>
+        <button id="btn-lobby-fs" class="hud-icon-btn">FS</button>
+        <button id="btn-leave-lobby" class="btn btn-danger btn-sm">Leave</button>
+      </div>
+    </div>
 
+    <div class="lobby-bottombar">
+      <div class="lobby-hint">Walk around the Dropship (WASD) or approach the <b>Laptop</b> (E) to customize & configure.</div>
+      <div class="lobby-launch-row">
+        <div id="bot-controls" class="bot-controls hidden">
+          <button id="btn-add-bot" class="btn btn-ghost btn-sm">+ Bot</button>
+          <button id="btn-rem-bot" class="btn btn-ghost btn-sm">- Bot</button>
+        </div>
+        <button id="btn-start-game" class="btn btn-primary hidden">Start Mission</button>
+        <div id="waiting-host-msg" class="waiting-msg hidden">Waiting for host...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DROPSHIP SETTINGS & ROSTER MODAL -->
+  <div id="settings-modal" class="modal-backdrop hidden">
+    <div class="panel lobby-panel">
+      <div class="modal-head">
+        <h3>DROPSHIP TERMINAL — SETTINGS & MANIFEST</h3>
+        <button id="btn-close-settings" class="btn btn-ghost btn-xs">Close (E)</button>
+      </div>
       <div class="lobby-grid">
         <div class="lobby-roster-box">
-          <div class="section-head">
-            <span>CREW MANIFEST (<span id="player-count">0</span>/10)</span>
-            <div id="bot-controls" class="bot-controls hidden">
-              <button id="btn-add-bot" class="btn btn-ghost btn-xs">+ Bot</button>
-              <button id="btn-rem-bot" class="btn btn-ghost btn-xs">- Bot</button>
-            </div>
-          </div>
+          <div class="section-head"><span>CREW MANIFEST</span></div>
           <div id="lobby-players" class="player-list"></div>
+          <div class="section-head" style="margin-top:12px"><span>CHANGE SUIT COLOR</span></div>
+          <div id="lobby-color-picker" class="color-picker"></div>
         </div>
 
         <div class="lobby-settings-box">
-          <div class="section-head"><span>MISSION SETTINGS</span></div>
-          <div class="setting-row">
-            <label>Impostors</label>
-            <select id="set-impostors">
-              <option value="1" selected>1 Impostor</option>
-              <option value="2">2 Impostors</option>
-            </select>
+          <div class="section-head"><span>MISSION RULES</span></div>
+          <div class="settings-scroll">
+            <div class="setting-row"><label>Impostors</label>
+              <select id="set-impostors"><option value="1" selected>1 Impostor</option><option value="2">2 Impostors</option></select>
+            </div>
+            <div class="setting-row"><label>Kill Cooldown</label>
+              <select id="set-killcd"><option value="15">15s</option><option value="22" selected>22s</option><option value="30">30s</option></select>
+            </div>
+            <div class="setting-row"><label>Move Speed</label>
+              <select id="set-speed"><option value="230">1.0x</option><option value="275" selected>1.2x</option><option value="320">1.4x</option></select>
+            </div>
+            <div class="setting-row"><label>Vote Time</label>
+              <select id="set-votetime"><option value="45">45s</option><option value="60" selected>60s</option><option value="90">90s</option></select>
+            </div>
+            <div class="setting-row"><label>Emergency Calls</label>
+              <select id="set-emerg"><option value="1" selected>1 per player</option><option value="2">2 per player</option><option value="3">3 per player</option></select>
+            </div>
+            <div class="setting-row"><label>Anonymous Votes</label>
+              <select id="set-anon"><option value="0" selected>Off</option><option value="1">On</option></select>
+            </div>
+            <div class="setting-row"><label>Confirm Ejects</label>
+              <select id="set-confirm"><option value="1" selected>On</option><option value="0">Off</option></select>
+            </div>
+            <div class="section-head" style="margin-top:10px"><span>SPECIAL ROLES</span></div>
+            <div class="setting-row"><label>Shapeshifter (Imp)</label>
+              <select id="role-shifter"><option value="1" selected>Enabled</option><option value="0">Off</option></select>
+            </div>
+            <div class="setting-row"><label>Engineer (Crew)</label>
+              <select id="role-engineer"><option value="1" selected>Enabled</option><option value="0">Off</option></select>
+            </div>
+            <div class="setting-row"><label>Scientist (Crew)</label>
+              <select id="role-scientist"><option value="1" selected>Enabled</option><option value="0">Off</option></select>
+            </div>
+            <div class="setting-row"><label>Sheriff (Crew)</label>
+              <select id="role-sheriff"><option value="1" selected>Enabled</option><option value="0">Off</option></select>
+            </div>
           </div>
-          <div class="setting-row">
-            <label>Kill Cooldown</label>
-            <select id="set-killcd">
-              <option value="15">15 sec</option>
-              <option value="22" selected>22 sec</option>
-              <option value="30">30 sec</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <label>Move Speed</label>
-            <select id="set-speed">
-              <option value="230">1.0x Normal</option>
-              <option value="275" selected>1.2x Swift</option>
-              <option value="320">1.4x Fast</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <label>Vote Time</label>
-            <select id="set-votetime">
-              <option value="45">45 sec</option>
-              <option value="60" selected>60 sec</option>
-              <option value="90">90 sec</option>
-            </select>
-          </div>
-          <div class="lobby-tip">
-            Controls: <b>WASD / Arrows</b> to move, <b>E</b> Use / Cams / Admin, <b>Q</b> Kill, <b>R</b> Report, <b>V</b> Vent, <b>M</b> Map.
-          </div>
-          <button id="btn-start-game" class="btn btn-primary btn-full hidden">Start Mission</button>
-          <div id="waiting-host-msg" class="waiting-msg hidden">Waiting for host to launch mission...</div>
         </div>
       </div>
     </div>
@@ -116,7 +135,6 @@
 
   <!-- IN-GAME HUD -->
   <div id="hud" class="hidden">
-    <!-- Top Left: Task Bar & Personal Tasks -->
     <div class="hud-top-left">
       <div class="task-progress-wrap">
         <div class="task-progress-label">
@@ -130,47 +148,61 @@
       <div id="task-list-box" class="task-list-box"></div>
     </div>
 
-    <!-- Top Center: Sabotage Banner & Room Name -->
     <div class="hud-top-center">
       <div id="room-indicator" class="room-pill">CAFETERIA</div>
       <div id="sabotage-banner" class="sabotage-banner hidden"></div>
     </div>
 
-    <!-- Top Right: Controls -->
     <div class="hud-top-right">
       <div id="role-badge" class="role-badge">CREWMATE</div>
+      <button id="btn-mic" class="hud-icon-btn" title="Proximity Voice Chat">MIC OFF</button>
       <button id="btn-toggle-map" class="hud-icon-btn" title="Ship Map (M)">MAP</button>
-      <button id="btn-mute" class="hud-icon-btn" title="Mute Audio">SFX</button>
+      <button id="btn-mute" class="hud-icon-btn" title="Mute SFX">SFX</button>
+      <button id="btn-fs" class="hud-icon-btn" title="Fullscreen">FS</button>
     </div>
 
-    <!-- Vent Action Strip (when inside vent) -->
+    <!-- Vent Action Strip -->
     <div id="vent-controls" class="vent-controls hidden">
       <button id="btn-vent-hop" class="btn btn-teal">Hop Next Vent (V)</button>
       <button id="btn-vent-exit" class="btn btn-danger">Exit Vent (E)</button>
     </div>
 
-    <!-- Sabotage Picker (Impostor) -->
+    <!-- Impostor Sabotage & Blast Doors Menu -->
     <div id="sabotage-menu" class="sabotage-menu hidden">
-      <div class="sab-title">SABOTAGE SYSTEMS</div>
-      <button id="btn-sab-lights" class="btn btn-gold btn-sm">Cut Lights (Electrical)</button>
-      <button id="btn-sab-reactor" class="btn btn-danger btn-sm">Reactor Meltdown (40s)</button>
+      <div class="sab-title">SYSTEM SABOTAGE</div>
+      <button id="btn-sab-lights" class="btn btn-gold btn-xs">Cut Lights (Electrical)</button>
+      <button id="btn-sab-reactor" class="btn btn-danger btn-xs">Reactor Meltdown (40s)</button>
+      <button id="btn-sab-o2" class="btn btn-danger btn-xs">O2 Depletion (35s)</button>
+      <button id="btn-sab-comms" class="btn btn-secondary btn-xs">Scramble Comms</button>
+      <div class="sab-title" style="margin-top:4px">LOCK BLAST DOORS (10s)</div>
+      <div class="door-grid">
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="cafeteria">Cafeteria</button>
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="electrical">Electrical</button>
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="medbay">MedBay</button>
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="security">Security</button>
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="storage">Storage</button>
+        <button class="btn btn-ghost btn-xs door-lock-btn" data-room="upper_engine">Engines</button>
+      </div>
       <button id="btn-sab-close" class="btn btn-ghost btn-xs">Close</button>
     </div>
 
-    <!-- Bottom Left: Mobile Joystick -->
+    <!-- Mobile Virtual Joystick -->
     <div id="joystick-zone" class="joystick-zone">
       <div id="joystick-base" class="joystick-base">
         <div id="joystick-knob" class="joystick-knob"></div>
       </div>
     </div>
 
-    <!-- Bottom Right: Action Buttons -->
+    <!-- Action Buttons -->
     <div class="hud-actions">
       <button id="act-sabotage" class="action-btn act-sab hidden">
         <span>SABO</span><small id="sab-cd"></small>
       </button>
+      <button id="act-ability" class="action-btn act-ability hidden">
+        <span id="ability-label">SKILL</span><small id="ability-cd">F</small>
+      </button>
       <button id="act-vent" class="action-btn act-vent hidden">
-        <span>VENT</span><small>V</small>
+        <span>VENT</span><small id="vent-cd">V</small>
       </button>
       <button id="act-kill" class="action-btn act-kill hidden" disabled>
         <span>KILL</span><small id="kill-cd">Q</small>
@@ -200,7 +232,7 @@
     </div>
   </div>
 
-  <!-- TASK / CONSOLE MODAL -->
+  <!-- TASK / SECURITY / ADMIN MODAL -->
   <div id="task-modal" class="modal-backdrop hidden">
     <div class="panel task-panel">
       <div class="modal-head">
@@ -209,6 +241,38 @@
       </div>
       <div id="task-modal-body" class="task-modal-body"></div>
     </div>
+  </div>
+
+  <!-- SHAPESHIFTER MORPH PICKER -->
+  <div id="morph-modal" class="modal-backdrop hidden">
+    <div class="panel task-panel">
+      <div class="modal-head">
+        <h3>SHAPESHIFT — SELECT TARGET</h3>
+        <button id="btn-close-morph" class="btn btn-ghost btn-xs">Cancel</button>
+      </div>
+      <div id="morph-list" class="morph-grid"></div>
+    </div>
+  </div>
+
+  <!-- SCIENTIST VITALS MONITOR -->
+  <div id="vitals-modal" class="modal-backdrop hidden">
+    <div class="panel task-panel">
+      <div class="modal-head">
+        <h3>CREW VITALS — BATTERY: <span id="vitals-bat">100%</span></h3>
+        <button id="btn-close-vitals" class="btn btn-ghost btn-xs">Close (F)</button>
+      </div>
+      <div id="vitals-grid" class="vitals-grid"></div>
+    </div>
+  </div>
+
+  <!-- KILL CUTSCENE OVERLAY (VICTIM ONLY) -->
+  <div id="kill-cutscene" class="kill-cutscene hidden">
+    <div class="kill-stage">
+      <div id="kc-killer" class="kc-avatar kc-killer"></div>
+      <div class="kc-slash"></div>
+      <div id="kc-victim" class="kc-avatar kc-victim"></div>
+    </div>
+    <div class="kill-banner">ELIMINATED!</div>
   </div>
 
   <!-- ROLE REVEAL SCREEN -->
@@ -220,7 +284,7 @@
     </div>
   </div>
 
-  <!-- MEETING & VOTING MODAL -->
+  <!-- MEETING, VOTING & GHOST CHAT -->
   <div id="meeting-screen" class="overlay-screen hidden">
     <div class="panel meeting-panel">
       <div class="meeting-header">
@@ -236,12 +300,15 @@
           <div id="meeting-players" class="meeting-players-grid"></div>
           <div class="vote-footer">
             <button id="btn-skip-vote" class="btn btn-secondary btn-sm">Skip Vote</button>
+            <div id="skip-voters" class="voter-chips"></div>
             <span id="vote-status-text" class="vote-status-text">Select a player to vote.</span>
           </div>
         </div>
 
         <div class="meeting-chat-col">
-          <div class="section-head"><span>COMMS CHANNEL</span></div>
+          <div class="section-head">
+            <span id="chat-channel-label">COMMS CHANNEL</span>
+          </div>
           <div id="chat-messages" class="chat-messages"></div>
           <form id="chat-form" class="chat-form">
             <input id="chat-input" type="text" maxlength="120" placeholder="Type message..." autocomplete="off" />
@@ -269,8 +336,8 @@
       <p id="gameover-reason"></p>
       <div id="gameover-impostors" class="gameover-impostors"></div>
       <div class="gameover-actions">
-        <button id="btn-play-again" class="btn btn-primary hidden">Return to Lobby</button>
-        <div id="gameover-wait" class="waiting-msg hidden">Waiting for host to return to lobby...</div>
+        <button id="btn-play-again" class="btn btn-primary hidden">Return to Dropship</button>
+        <div id="gameover-wait" class="waiting-msg hidden">Waiting for host...</div>
       </div>
     </div>
   </div>
